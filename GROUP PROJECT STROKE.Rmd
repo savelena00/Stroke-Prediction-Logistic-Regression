@@ -1,0 +1,353 @@
+### Import neccessary library
+```{r}
+
+library(caTools)
+library(carData)
+library(car)
+library(ggplot2)
+library(lattice)
+library(caret)
+library(MASS)
+library(pROC)
+citation("pROC")
+
+```
+
+### Read the dataframe
+```{r}
+df <- read.csv("stroke.csv", header= TRUE, na.strings=c('N/A'))
+df
+
+View(df)
+```
+
+### See the dimensions of the dataframe
+
+```{r}
+dim(df)
+```
+
+There are 5110 observations and 12 variables
+
+### Check for Missing Values
+
+```{r}
+colSums(is.na(df))
+```
+
+### MISSING VALUES 
+
+The only variable with missing value is bmi. To fill it in we will check the normality of the variable and observe the outliers.
+
+```{r}
+boxplot(df$bmi,data=df, main="Distribution BMI",xlab="BMI", ylab="Counts",horizontal= TRUE)
+```
+There are various outliers observed on the right tail side of the plot.
+
+```{r}
+df_na_bmi<- subset(df, is.na(bmi))
+df_na_bmi
+```
+
+We will first test the normality of the variable
+
+```{r}
+shapiro.test(df$bmi)
+```
+The overall distributio for bmi shows a very small p-value which indicates that it is statistically significant, therefore we have enough statisitical evidence to reject the  null hypothesis and claim that the variable bmi has an abnormal distribution. 
+
+Test the normality based on groups
+```{r}
+data_no_stroke<- subset(df, stroke == 0)
+shapiro.test(data_no_stroke$bmi)
+
+```
+```{r}
+
+data_yes_stroke <- subset(df, stroke == 1)
+shapiro.test(data_yes_stroke$bmi)
+```
+From both of the distributions for bmi based on stroke, it shows very small p-values which indicates that they are statistically significant, therefore we have enough statisitical evidence to reject the  null hypothesis and claim that the variable bmi has an abnormal distribution. 
+
+### Replace Missing Values with Median
+
+We use median becasuse it is less suscpetible to otuliers and extreme values.
+
+```{r}
+median_bmi<- median(df$bmi,na.rm = TRUE)
+df$bmi <- ifelse(is.na(df$bmi), median_bmi, df$bmi)
+```
+
+We will check if the missing values have been imputted
+
+```{r}
+colSums(is.na(df))
+```
+### Distribution
+
+To understand the data further we will look at the proportion of each variables to understand whether the survey is biased or not
+
+Split the variables into both numerical and categorical
+```{r}
+library(dplyr)
+cat_var <- df %>% 
+  select(where(is.character), 
+         c("gender", "hypertension", "heart_disease", "ever_married", "work_type", "smoking_status"))
+
+
+num_var <- df %>% 
+  select(where(is.numeric), 
+         c("age", "avg_glucose_level", "bmi"))
+```
+
+
+```{r}
+plot_norm <- function(df) {
+  # Loop over each column in the data frame
+  for (col in names(df)) {
+    # Create a frequency table for the column
+    freq_table <- table(df[[col]])
+    
+    # Plot the frequency table using a bar plot
+    barplot(freq_table, main = paste(col, "Distribution"), xlab = col, ylab = "Frequency")
+  }
+}
+
+plot_norm(cat_var)
+```
+To see the distribution of the numerical variables
+```{r}
+plot_norm(num_var)
+```
+
+
+
+### Initial Feature Selection
+```{r}
+df<- subset(df, select = -c(Residence_type))
+```
+
+
+### Multicollinearity Check
+```{r}
+#Check for multicollinearity (no gender and residence)
+M <- lm(stroke~.,data=df)
+vif(M)
+```
+All the VIFs are very small (<5) thus implying that the chances of multicollinearity between the variables are minimum.
+
+### FEATURE SELECTION - STEPWISE
+We will be using the Forward Fill to find the variables
+
+Gender
+```{r}
+model <- glm(factor(stroke) ~ factor(gender) , data = df, family = "binomial")
+summary(model)
+
+```
+Gender is not considered significant so we can drop it from the model.
+
+Age
+```{r}
+model <- glm(factor(stroke) ~ age , data = df, family = "binomial")
+summary(model)
+```
+Age is significant
+
+```{r}
+model <- glm(factor(stroke) ~ age + factor(hypertension) , data = df, family = "binomial")
+summary(model)
+```
+Hypertension is significant
+
+Heart Disease
+
+```{r}
+model <- glm(factor(stroke) ~ age + factor(hypertension) + heart_disease , data = df, family = "binomial")
+summary(model)
+```
+heart disease is significant
+
+ever_maried
+
+```{r}
+model <- glm(factor(stroke) ~ age + factor(hypertension) + factor(heart_disease)+ factor(ever_married), data = df, family = "binomial")
+summary(model)
+```
+ever marreid is not significant
+
+Work type
+
+```{r}
+model <- glm(factor(stroke) ~ age + factor(hypertension) + factor(heart_disease)+ factor(work_type), data = df, family = "binomial")
+summary(model)
+```
+
+
+
+### Splitting the Data
+```{r}
+index <- createDataPartition(df$stroke, p = 0.8, list = FALSE)
+train <- df[index, ]
+test <- df[-index, ]
+
+dim(train)
+dim(test)
+
+```
+### Compare Training and Testing Model
+
+Training Model
+```{r}
+train_simple <- glm(factor(stroke) ~ age + factor(hypertension) + avg_glucose_level , data = train, family = "binomial")
+summary(train_simple)
+```
+
+```{r}
+train_full <- glm(factor(stroke) ~ age + factor(hypertension) + avg_glucose_level + factor(smoking_status):bmi, data = train, family = "binomial")
+summary(train_full)
+```
+Testing Model
+```{r}
+test_simple <- glm(factor(stroke) ~ age + factor(hypertension) + avg_glucose_level , data = test, family = "binomial")
+summary(test_simple)
+```
+
+```{r}
+test_full <- glm(factor(stroke) ~ age + factor(hypertension) + avg_glucose_level + factor(smoking_status):bmi, data = test, family = "binomial")
+summary(test_full)
+```
+
+
+Compare the results of the fit of the two models for each training and testing data using likelihood ratio test
+```{r}
+fit_train <- pchisq(1284.2-1279.5, 4084-4008, lower.tail = FALSE)
+fit_test<- pchisq(306.07-303.04,1018-1014,lower.tail=FALSE)
+
+cat("Likelihood Ratio Test:", "\n")
+cat("Training Data Train",fit_train, "Training Data Test:", fit_test)
+```
+From the test above we can see that the testing data performs better although the model fit might not be very good as the the p-values of each model are much higher than 0.05.
+
+### Classification table
+```{r}
+model <- glm(stroke ~ age + hypertension + avg_glucose_level, data = train, family = binomial)
+pred <- predict(model, newdata = test, type = "response")
+pred_class <- ifelse(pred > 0.04872798, 1, 0)
+classification_table <- table(actual = test$stroke, predicted = pred_class)
+classification_table
+```
+```{r}
+TP <- classification_table[2,2]
+FP <- classification_table[1,2]
+TN <- classification_table[1,1]
+FN <- classification_table[2,1]
+
+sensitivity <- TP / (TP + FN)
+specificity <- TN / (TN + FP)
+accuracy <- (TP + TN)/ (TP + FN + TN + FP)
+
+c(sensitivity,specificity,accuracy)
+```
+### ROC Curve
+
+```{r}
+roc_obj <- roc(test$stroke, pred)
+
+plot(roc_obj, main = "ROC Curve", print.auc = TRUE)
+
+```
+ Hosmer-Lemeshow test (Lack of fit test)
+```{r}
+# Load the necessary libraries
+install.packages("glmtoolbox")
+library(glmtoolbox)
+
+# Fit the logistic regression model
+model <- glm(stroke ~ age + hypertension + avg_glucose_level, data = train, family = binomial)
+hltest(model)
+
+
+```
+```{r}
+model_test <- glm(stroke ~ age + hypertension + avg_glucose_level, data = test, family = binomial)
+hltest(model_test)
+```
+
+
+The large p-value indicates that our p-value is staistically insignificant thereofre we do not have enough evidence to reject the null hypothesis. Thus, we can claim that there is not evidence to say that our model is not a good fit. 
+
+As the Hoswel Lemeshow test is prone to low power. 
+
+
+However, as the Hoswel Lemeshow test is not the best method to validate our model due to our relatively small sample size, we will conduct other statistical test which is the deviance goodness of fit test. This test is also robust to sample size which is suitable to assess our model.
+
+```{r}
+model <- glm(stroke ~ age + hypertension + avg_glucose_level, data = train, family = binomial)
+summary(model)
+
+
+deviance_test <- anova(model, test="Chisq")
+summary(deviance_test)
+
+```
+RESIDUAL DEVIANCE
+```{r}
+fitted <- unname(model$fitted.values)
+actual <- train$stroke
+
+ll <- function(y, pi) return(y*log(pi)+(1-y)*log(1-pi))
+D <- -2 * sum(ll(y=actual, pi=fitted))
+print(D)
+```
+NULL DEVIANCE
+
+```{r}
+actual <- train$stroke
+ravg   <- mean(df$stroke)
+
+ll <- function(y, pi) return(y*log(pi)+(1-y)*log(1-pi))
+
+nullDeviance <- -2 * sum(ll(y=actual, pi=ravg))
+
+print(nullDeviance)
+```
+
+COMPARIOSN NULL AND RESIDUAL
+
+```{r}
+fitted <- unname(model$fitted.values)
+actual <- train$stroke
+ravg   <- mean(train$stroke)  
+
+ll <- function(y, pi) return(y*log(pi)+(1-y)*log(1-pi))
+
+# renaming `D` to  `residualDeviance` =>
+residualDeviance <- -2 * sum(ll(y=actual, pi=fitted))
+nullDeviance     <- -2 * sum(ll(y=actual, pi=ravg))
+devianceDiff     <- nullDeviance - residualDeviance
+
+
+rd_df <- length(actual) - length(model$coefficients)
+dd_df <- length(actual) - 1
+df    <- dd_df - rd_df # 2
+df
+
+p_val <- pchisq(devianceDiff, df=df, lower.tail=FALSE)
+
+print(p_val)
+```
+The small p-value indicates that it is statistically highly significant.
+
+PSEUDO R-SQUARED
+
+```{r}
+nullDeviance     <- model$null.deviance # 1013.426
+residualDeviance <- model$deviance      # 772.5335
+pseudoRSquared   <- 1 - (residualDeviance/nullDeviance)
+
+print(pseudoRSquared)
+
+```
+
+
